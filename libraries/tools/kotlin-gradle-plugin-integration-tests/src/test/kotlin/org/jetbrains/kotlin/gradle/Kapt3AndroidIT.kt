@@ -1,18 +1,18 @@
 package org.jetbrains.kotlin.gradle
 
 import org.jetbrains.kotlin.gradle.util.isLegacyAndroidGradleVersion
+import org.jetbrains.kotlin.gradle.util.modify
 import org.jetbrains.kotlin.test.KotlinTestUtils
 import org.junit.Test
-import java.io.File
 
 class Kapt3Android30IT : Kapt3AndroidIT() {
     override val androidGradlePluginVersion: String
-        get() = "3.0.0-beta1"
+        get() = "3.2.0-alpha18"
 }
 
 open class Kapt3AndroidIT : Kapt3BaseIT() {
     companion object {
-        private val GRADLE_VERSION = GradleVersionRequired.AtLeast("4.1")
+        private val GRADLE_VERSION = GradleVersionRequired.AtLeast("4.6")
     }
 
     protected open val androidGradlePluginVersion: String
@@ -116,11 +116,40 @@ open class Kapt3AndroidIT : Kapt3BaseIT() {
         val project = Project("android-databinding", GRADLE_VERSION, directoryPrefix = "kapt2")
         val options = androidBuildOptions()
 
+
+        if (!isLegacyAndroidGradleVersion(androidGradlePluginVersion)) {
+            project.setupWorkingDir()
+
+            // With new AGP, there's no need in the Databinding kapt dependency:
+            project.gradleBuildScript("app").modify {
+                it.lines().filterNot {
+                    it.contains("kapt \"com.android.databinding:compiler")
+                }.joinToString("\n")
+            }
+
+            // Workaround for KT-24915
+            project.gradleBuildScript("app").appendText(
+                "\n" + """
+               afterEvaluate {
+                    kaptDebugKotlin.dependsOn dataBindingExportFeaturePackageIdsDebug
+               }
+            """.trimIndent()
+            )
+        }
+
         project.build("assembleDebug", options = options) {
             assertSuccessful()
             assertKaptSuccessful()
             assertFileExists("app/build/generated/source/kapt/debug/com/example/databinding/BR.java")
-            assertFileExists("app/build/generated/source/kapt/debug/com/example/databinding/databinding/ActivityTestBinding.java")
+
+            if (isLegacyAndroidGradleVersion(androidGradlePluginVersion)) {
+                assertFileExists("app/build/generated/source/kapt/debug/com/example/databinding/databinding/ActivityTestBinding.java")
+            } else {
+                assertFileExists("app/build/generated/source/kapt/debug/com/example/databinding/databinding/ActivityTestBindingImpl.java")
+            }
+
+            // KT-23866
+            assertNotContains("The following options were not recognized by any processor")
         }
     }
 }
