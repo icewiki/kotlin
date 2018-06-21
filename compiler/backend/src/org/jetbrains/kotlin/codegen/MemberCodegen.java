@@ -708,6 +708,30 @@ public abstract class MemberCodegen<T extends KtPureElement/* TODO: & KtDeclarat
                 generateSyntheticAccessor(accessor);
             }
         }
+
+        AccessorForCompanionObjectDescriptor accessorForCompanionObjectDescriptor =
+                context.getAccessorForCompanionObjectDescriptorIfRequired();
+        if (accessorForCompanionObjectDescriptor != null) {
+            generateSyntheticAccessorForCompanionObject(accessorForCompanionObjectDescriptor);
+        }
+    }
+
+    private void generateSyntheticAccessorForCompanionObject(@NotNull AccessorForCompanionObjectDescriptor accessor) {
+        ClassDescriptor companionObjectDescriptor = accessor.getCompanionObjectDescriptor();
+        DeclarationDescriptor hostClassDescriptor = companionObjectDescriptor.getContainingDeclaration();
+        assert hostClassDescriptor instanceof ClassDescriptor : "Class descriptor expected: " + hostClassDescriptor;
+        functionCodegen.generateMethod(
+                Synthetic(null, companionObjectDescriptor),
+                accessor,
+                new FunctionGenerationStrategy.CodegenBased(state) {
+                    @Override
+                    public void doGenerateBody(@NotNull ExpressionCodegen codegen, @NotNull JvmMethodSignature signature) {
+                        Type companionObjectType = typeMapper.mapClass(companionObjectDescriptor);
+                        StackValue.singleton(companionObjectDescriptor, typeMapper).put(companionObjectType, codegen.v);
+                        codegen.v.areturn(companionObjectType);
+                    }
+                }
+        );
     }
 
     private void generateSyntheticAccessor(@NotNull AccessorForCallableDescriptor<?> accessorForCallableDescriptor) {

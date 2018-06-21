@@ -15,6 +15,7 @@ import org.jetbrains.kotlin.codegen.state.KotlinTypeMapper;
 import org.jetbrains.kotlin.descriptors.*;
 import org.jetbrains.kotlin.load.java.JavaVisibilities;
 import org.jetbrains.kotlin.load.java.sam.SamConstructorDescriptor;
+import org.jetbrains.kotlin.name.Name;
 import org.jetbrains.kotlin.psi.KtFile;
 import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.storage.LockBasedStorageManager;
@@ -44,12 +45,12 @@ public abstract class CodegenContext<T extends DeclarationDescriptor> {
     private Map<DeclarationDescriptor, CodegenContext> childContexts;
     private Map<AccessorKey, AccessorForCallableDescriptor<?>> accessors;
     private Map<AccessorKey, AccessorForPropertyDescriptorFactory> propertyAccessorFactories;
+    private AccessorForCompanionObjectDescriptor accessorForCompanionObjectDescriptor = null;
 
     private static class AccessorKey {
         public final DeclarationDescriptor descriptor;
         public final ClassDescriptor superCallLabelTarget;
         public final AccessorKind accessorKind;
-
         public AccessorKey(
                 @NotNull DeclarationDescriptor descriptor,
                 @Nullable ClassDescriptor superCallLabelTarget,
@@ -742,4 +743,30 @@ public abstract class CodegenContext<T extends DeclarationDescriptor> {
     public LocalLookup getEnclosingLocalLookup() {
         return enclosingLocalLookup;
     }
+
+    @NotNull
+    public AccessorForCompanionObjectDescriptor markCompanionObjectDescriptorWithAccessorRequired(@NotNull ClassDescriptor companionObjectDescriptor) {
+        assert DescriptorUtils.isCompanionObject(companionObjectDescriptor) : "Companion object expected: " + companionObjectDescriptor;
+
+        assert accessorForCompanionObjectDescriptor == null
+               || accessorForCompanionObjectDescriptor.getCompanionObjectDescriptor() == companionObjectDescriptor
+                : "Unexpected companion object descriptor with accessor required: " + companionObjectDescriptor +
+                  "; should be " + accessorForCompanionObjectDescriptor.getCompanionObjectDescriptor();
+
+        if (accessorForCompanionObjectDescriptor == null) {
+            accessorForCompanionObjectDescriptor =
+                    new AccessorForCompanionObjectDescriptor(
+                            companionObjectDescriptor,
+                            Name.identifier(JvmCodegenUtil.getCompanionObjectAccessorName(companionObjectDescriptor))
+                    );
+        }
+
+        return accessorForCompanionObjectDescriptor;
+    }
+
+    @Nullable
+    public AccessorForCompanionObjectDescriptor getAccessorForCompanionObjectDescriptorIfRequired() {
+        return accessorForCompanionObjectDescriptor;
+    }
+
 }

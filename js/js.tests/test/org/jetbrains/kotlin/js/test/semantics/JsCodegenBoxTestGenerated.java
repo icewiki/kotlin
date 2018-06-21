@@ -12218,6 +12218,44 @@ public class JsCodegenBoxTestGenerated extends AbstractJsCodegenBoxTest {
         public void testUseImportedMemberFromCompanion() throws Exception {
             runTest("compiler/testData/codegen/box/objects/useImportedMemberFromCompanion.kt");
         }
+
+        @TestMetadata("compiler/testData/codegen/box/objects/companionObjectVisibility")
+        @TestDataPath("$PROJECT_ROOT")
+        @RunWith(JUnit3RunnerWithInners.class)
+        public static class CompanionObjectVisibility extends AbstractJsCodegenBoxTest {
+            private void runTest(String testDataFilePath) throws Exception {
+                KotlinTestUtils.runTest0(this::doTest, TargetBackend.JS, testDataFilePath);
+            }
+
+            public void testAllFilesPresentInCompanionObjectVisibility() throws Exception {
+                KotlinTestUtils.assertAllTestsPresentByMetadata(this.getClass(), new File("compiler/testData/codegen/box/objects/companionObjectVisibility"), Pattern.compile("^(.+)\\.kt$"), TargetBackend.JS, true);
+            }
+
+            @TestMetadata("privateCompanionObjectAccessedFromMethodInlinedInNestedClass.kt")
+            public void testPrivateCompanionObjectAccessedFromMethodInlinedInNestedClass() throws Exception {
+                runTest("compiler/testData/codegen/box/objects/companionObjectVisibility/privateCompanionObjectAccessedFromMethodInlinedInNestedClass.kt");
+            }
+
+            @TestMetadata("privateCompanionObjectAccessedFromNestedClass.kt")
+            public void testPrivateCompanionObjectAccessedFromNestedClass() throws Exception {
+                runTest("compiler/testData/codegen/box/objects/companionObjectVisibility/privateCompanionObjectAccessedFromNestedClass.kt");
+            }
+
+            @TestMetadata("privateCompanionObjectAccessedFromNestedClassSeveralTimes.kt")
+            public void testPrivateCompanionObjectAccessedFromNestedClassSeveralTimes() throws Exception {
+                runTest("compiler/testData/codegen/box/objects/companionObjectVisibility/privateCompanionObjectAccessedFromNestedClassSeveralTimes.kt");
+            }
+
+            @TestMetadata("privateCompanionObjectUsedInNestedClass.kt")
+            public void testPrivateCompanionObjectUsedInNestedClass() throws Exception {
+                runTest("compiler/testData/codegen/box/objects/companionObjectVisibility/privateCompanionObjectUsedInNestedClass.kt");
+            }
+
+            @TestMetadata("protectedCompanionObjectAccessedFromNestedClass.kt")
+            public void testProtectedCompanionObjectAccessedFromNestedClass() throws Exception {
+                runTest("compiler/testData/codegen/box/objects/companionObjectVisibility/protectedCompanionObjectAccessedFromNestedClass.kt");
+            }
+        }
     }
 
     @TestMetadata("compiler/testData/codegen/box/operatorConventions")
