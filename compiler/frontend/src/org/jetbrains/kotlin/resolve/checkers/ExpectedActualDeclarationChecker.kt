@@ -92,9 +92,12 @@ object ExpectedActualDeclarationChecker : DeclarationChecker {
         }
     }
 
-    internal fun isOptionalAnnotationClass(descriptor: DeclarationDescriptor): Boolean {
-        return descriptor.annotations.hasAnnotation(OPTIONAL_EXPECTATION_FQ_NAME)
-    }
+    @JvmStatic
+    fun isOptionalAnnotationClass(descriptor: DeclarationDescriptor): Boolean =
+        descriptor is ClassDescriptor &&
+                descriptor.kind == ClassKind.ANNOTATION_CLASS &&
+                descriptor.isExpect &&
+                descriptor.annotations.hasAnnotation(OPTIONAL_EXPECTATION_FQ_NAME)
 
     private fun ExpectActualTracker.reportExpectActual(expected: MemberDescriptor, actualMembers: Sequence<MemberDescriptor>) {
         if (this is ExpectActualTracker.DoNothing) return

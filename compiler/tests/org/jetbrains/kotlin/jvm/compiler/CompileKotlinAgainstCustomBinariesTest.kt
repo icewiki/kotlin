@@ -432,6 +432,12 @@ class CompileKotlinAgainstCustomBinariesTest : AbstractKotlinCompilerIntegration
         compileKotlin("source.kt", tmpdir, listOf(library))
     }
 
+    fun testOptionalAnnotationJs() {
+        val args = listOf("-Xmulti-platform", "-Xuse-experimental=kotlin.ExperimentalMultiplatform")
+        val library = compileJsLibrary("library", args)
+        compileKotlin("source.kt", File(tmpdir, "usage.js"), listOf(library), K2JSCompiler(), args)
+    }
+
     companion object {
         // compiler before 1.1.4 version  did not include suspension marks into bytecode.
         private fun stripSuspensionMarksToImitateLegacyCompiler(bytes: ByteArray): Pair<ByteArray, Int> {
