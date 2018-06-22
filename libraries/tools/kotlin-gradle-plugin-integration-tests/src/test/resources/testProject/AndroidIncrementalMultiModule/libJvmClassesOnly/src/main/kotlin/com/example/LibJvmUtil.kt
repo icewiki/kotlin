@@ -3,12 +3,11 @@
  * that can be found in the license/LICENSE.txt file.
  */
 
-package com.example;
+package com.example
 
-import android.app.Activity;
-
-public class JavaActivity extends Activity {
-    void f() {
-        DummyKt.getSomething();
+class LibJvmUtil {
+    companion object {
+        fun libJvmUtil(): String =
+            "Hello, World"
     }
 }
