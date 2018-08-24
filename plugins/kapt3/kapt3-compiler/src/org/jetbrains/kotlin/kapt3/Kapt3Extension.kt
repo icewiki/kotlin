@@ -27,27 +27,30 @@ import org.jetbrains.kotlin.backend.common.output.OutputFile
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.OUTPUT
 import org.jetbrains.kotlin.cli.common.messages.MessageCollector
 import org.jetbrains.kotlin.cli.common.messages.OutputMessageUtil
-import org.jetbrains.kotlin.cli.common.output.outputUtils.writeAll
+import org.jetbrains.kotlin.cli.common.output.writeAll
+import org.jetbrains.kotlin.codegen.ClassBuilderMode
 import org.jetbrains.kotlin.codegen.CompilationErrorHandler
 import org.jetbrains.kotlin.codegen.KotlinCodegenFacade
+import org.jetbrains.kotlin.codegen.OriginCollectingClassBuilderFactory
 import org.jetbrains.kotlin.codegen.state.GenerationState
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.container.ComponentProvider
 import org.jetbrains.kotlin.context.ProjectContext
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
-import org.jetbrains.kotlin.kapt3.AptMode.*
+import org.jetbrains.kotlin.kapt3.AptMode.APT_ONLY
+import org.jetbrains.kotlin.kapt3.AptMode.WITH_COMPILATION
 import org.jetbrains.kotlin.kapt3.base.KaptContext
 import org.jetbrains.kotlin.kapt3.base.KaptPaths
 import org.jetbrains.kotlin.kapt3.base.ProcessorLoader
 import org.jetbrains.kotlin.kapt3.base.doAnnotationProcessing
+import org.jetbrains.kotlin.kapt3.base.stubs.KaptStubLineInformation.Companion.KAPT_METADATA_EXTENSION
 import org.jetbrains.kotlin.kapt3.base.util.KaptBaseError
+import org.jetbrains.kotlin.kapt3.base.util.getPackageNameJava9Aware
+import org.jetbrains.kotlin.kapt3.base.util.info
 import org.jetbrains.kotlin.kapt3.diagnostic.KaptError
 import org.jetbrains.kotlin.kapt3.stubs.ClassFileToSourceStubConverter
 import org.jetbrains.kotlin.kapt3.stubs.ClassFileToSourceStubConverter.KaptStub
-import org.jetbrains.kotlin.kapt3.base.stubs.KaptStubLineInformation.Companion.KAPT_METADATA_EXTENSION
-import org.jetbrains.kotlin.kapt3.base.util.getPackageNameJava9Aware
-import org.jetbrains.kotlin.kapt3.base.util.info
 import org.jetbrains.kotlin.kapt3.util.MessageCollectorBackedKaptLogger
 import org.jetbrains.kotlin.modules.TargetId
 import org.jetbrains.kotlin.psi.KtFile
@@ -69,11 +72,15 @@ class ClasspathBasedKapt3Extension(
         val useLightAnalysis: Boolean,
         correctErrorTypes: Boolean,
         mapDiagnosticLocations: Boolean,
+        strictMode: Boolean,
         pluginInitializedTime: Long,
         logger: MessageCollectorBackedKaptLogger,
         compilerConfiguration: CompilerConfiguration
-) : AbstractKapt3Extension(paths, options, javacOptions, annotationProcessorFqNames,
-                           aptMode, pluginInitializedTime, logger, correctErrorTypes, mapDiagnosticLocations, compilerConfiguration) {
+) : AbstractKapt3Extension(
+    paths, options, javacOptions, annotationProcessorFqNames,
+    aptMode, pluginInitializedTime, logger, correctErrorTypes, mapDiagnosticLocations, strictMode,
+    compilerConfiguration
+) {
     override val analyzePartially: Boolean
         get() = useLightAnalysis
 
@@ -107,6 +114,7 @@ abstract class AbstractKapt3Extension(
         val logger: MessageCollectorBackedKaptLogger,
         val correctErrorTypes: Boolean,
         val mapDiagnosticLocations: Boolean,
+        val strictMode: Boolean,
         val compilerConfiguration: CompilerConfiguration
 ) : PartialAnalysisHandlerExtension() {
     private var annotationProcessingComplete = false
@@ -145,10 +153,21 @@ abstract class AbstractKapt3Extension(
 
         logger.info { "Initial analysis took ${System.currentTimeMillis() - pluginInitializedTime} ms" }
 
+        val bindingContext = bindingTrace.bindingContext
+        if (aptMode.generateStubs) {
+            logger.info { "Kotlin files to compile: " + files.map { it.virtualFile?.name ?: "<in memory ${it.hashCode()}>" } }
+
+            contextForStubGeneration(project, module, bindingContext, files.toList()).use { context ->
+                generateKotlinSourceStubs(context)
+            }
+        }
+
+        if (!aptMode.runAnnotationProcessing) return doNotGenerateCode()
+
         val processors = loadProcessors()
         if (processors.isEmpty()) return if (aptMode != WITH_COMPILATION) doNotGenerateCode() else null
 
-        val kaptContext = generateStubs(project, module, bindingTrace.bindingContext, files)
+        val kaptContext = KaptContext(paths, false, logger, mapDiagnosticLocations, options, javacOptions)
 
         fun handleKaptError(error: KaptError): AnalysisResult {
             val cause = error.cause
@@ -189,23 +208,6 @@ abstract class AbstractKapt3Extension(
         }
     }
 
-    private fun generateStubs(
-        project: Project,
-        module: ModuleDescriptor,
-        context: BindingContext,
-        files: Collection<KtFile>
-    ): KaptContext {
-        if (!aptMode.generateStubs) {
-            return KaptContext(paths, false, logger, mapDiagnosticLocations, options, javacOptions)
-        }
-
-        logger.info { "Kotlin files to compile: " + files.map { it.virtualFile?.name ?: "<in memory ${it.hashCode()}>" } }
-
-        return compileStubs(project, module, context, files.toList()).apply {
-            generateKotlinSourceStubs(this)
-        }
-    }
-
     private fun runAnnotationProcessing(kaptContext: KaptContext, processors: List<Processor>) {
         if (!aptMode.runAnnotationProcessing) return
 
@@ -219,13 +221,13 @@ abstract class AbstractKapt3Extension(
         logger.info { "Annotation processing took $annotationProcessingTime ms" }
     }
 
-    private fun compileStubs(
+    private fun contextForStubGeneration(
             project: Project,
             module: ModuleDescriptor,
             bindingContext: BindingContext,
             files: List<KtFile>
     ): KaptContextForStubGeneration {
-        val builderFactory = Kapt3BuilderFactory()
+        val builderFactory = OriginCollectingClassBuilderFactory(ClassBuilderMode.KAPT3)
 
         val targetId = TargetId(
                 name = compilerConfiguration[CommonConfigurationKeys.MODULE_NAME] ?: module.name.asString(),
@@ -257,7 +259,12 @@ abstract class AbstractKapt3Extension(
     }
 
     private fun generateKotlinSourceStubs(kaptContext: KaptContextForStubGeneration) {
-        val converter = ClassFileToSourceStubConverter(kaptContext, generateNonExistentClass = true, correctErrorTypes = correctErrorTypes)
+        val converter = ClassFileToSourceStubConverter(
+            kaptContext,
+            generateNonExistentClass = true,
+            correctErrorTypes = correctErrorTypes,
+            strictMode = strictMode
+        )
 
         val (stubGenerationTime, kaptStubs) = measureTimeMillis {
             converter.convert()

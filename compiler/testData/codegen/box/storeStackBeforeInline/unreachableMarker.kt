@@ -1,4 +1,4 @@
-// IGNORE_BACKEND: JS_IR
+// IGNORE_BACKEND: JVM_IR
 // WITH_RUNTIME
 
 import kotlin.test.assertEquals

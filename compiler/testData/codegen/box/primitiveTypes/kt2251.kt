@@ -1,4 +1,3 @@
-// IGNORE_BACKEND: JS_IR
 class A(var b: Byte) {
   fun c(d: Short)  = (b + d.toByte()).toChar()
 }

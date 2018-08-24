@@ -1,4 +1,3 @@
-// IGNORE_BACKEND: JS_IR
 fun box(): String {
     val d = 42.0
     val c = 'C'

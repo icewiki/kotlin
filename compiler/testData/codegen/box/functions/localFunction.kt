@@ -1,4 +1,3 @@
-// IGNORE_BACKEND: JS_IR
 fun IntRange.forEach(body : (Int) -> Unit) {
     for(i in this) {
         body(i)

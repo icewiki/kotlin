@@ -1,5 +1,5 @@
 /*
- * Copyright 2000-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
  * that can be found in the license/LICENSE.txt file.
  */
 
@@ -35,7 +35,9 @@ import org.jetbrains.kotlin.renderer.DescriptorRenderer;
 import org.jetbrains.kotlin.resolve.DescriptorUtils;
 import org.jetbrains.kotlin.resolve.InlineClassesUtilsKt;
 import org.jetbrains.kotlin.resolve.annotations.AnnotationUtilKt;
+import org.jetbrains.kotlin.resolve.checkers.ExpectedActualDeclarationChecker;
 import org.jetbrains.kotlin.resolve.inline.InlineUtil;
+import org.jetbrains.kotlin.resolve.jvm.AsmTypes;
 import org.jetbrains.kotlin.resolve.jvm.JvmClassName;
 import org.jetbrains.kotlin.resolve.jvm.JvmPrimitiveType;
 import org.jetbrains.kotlin.resolve.jvm.RuntimeAssertionInfo;
@@ -43,6 +45,7 @@ import org.jetbrains.kotlin.resolve.jvm.diagnostics.JvmDeclarationOrigin;
 import org.jetbrains.kotlin.serialization.DescriptorSerializer;
 import org.jetbrains.kotlin.synthetic.SyntheticJavaPropertyDescriptor;
 import org.jetbrains.kotlin.types.KotlinType;
+import org.jetbrains.kotlin.types.SimpleType;
 import org.jetbrains.org.objectweb.asm.*;
 import org.jetbrains.org.objectweb.asm.commons.InstructionAdapter;
 import org.jetbrains.org.objectweb.asm.commons.Method;
@@ -112,8 +115,24 @@ public class AsmUtil {
 
     @NotNull
     public static Type boxType(@NotNull Type type) {
+        Type boxedType = boxPrimitiveType(type);
+        return boxedType != null ? boxedType : type;
+    }
+
+    @NotNull
+    public static Type boxType(@NotNull Type type, @NotNull KotlinType kotlinType, @NotNull GenerationState state) {
+        if (InlineClassesUtilsKt.isInlineClassType(kotlinType)) {
+            return state.getTypeMapper().mapTypeAsDeclaration(kotlinType);
+        }
+
+        Type boxedPrimitiveType = boxPrimitiveType(type);
+        return boxedPrimitiveType != null ? boxedPrimitiveType : type;
+    }
+
+    @Nullable
+    private static Type boxPrimitiveType(@NotNull Type type) {
         JvmPrimitiveType jvmPrimitiveType = primitiveTypeByAsmSort.get(type.getSort());
-        return jvmPrimitiveType != null ? asmTypeByFqNameWithoutInnerClasses(jvmPrimitiveType.getWrapperFqName()) : type;
+        return jvmPrimitiveType != null ? asmTypeByFqNameWithoutInnerClasses(jvmPrimitiveType.getWrapperFqName()) : null;
     }
 
     @NotNull
@@ -128,6 +147,10 @@ public class AsmUtil {
     @Nullable
     public static Type unboxPrimitiveTypeOrNull(@NotNull Type boxedType) {
         return primitiveTypeByBoxedType.get(boxedType);
+    }
+
+    public static boolean isBoxedPrimitiveType(@NotNull Type boxedType) {
+        return primitiveTypeByBoxedType.get(boxedType) != null;
     }
 
     @NotNull
@@ -278,6 +301,9 @@ public class AsmUtil {
         if (descriptor instanceof SyntheticClassDescriptorForLambda) {
             return getVisibilityAccessFlagForAnonymous(descriptor);
         }
+        if (ExpectedActualDeclarationChecker.isOptionalAnnotationClass(descriptor)) {
+            return NO_FLAG_PACKAGE_PRIVATE;
+        }
         if (descriptor.getVisibility() == Visibilities.PUBLIC ||
             descriptor.getVisibility() == Visibilities.PROTECTED ||
             // TODO: should be package private, but for now Kotlin's reflection can't access members of such classes
@@ -400,6 +426,10 @@ public class AsmUtil {
             return NO_FLAG_PACKAGE_PRIVATE;
         }
 
+        if (memberDescriptor instanceof AccessorForCompanionObjectInstanceFieldDescriptor) {
+            return NO_FLAG_PACKAGE_PRIVATE;
+        }
+
         // the following code is only for PRIVATE visibility of member
         if (memberDescriptor instanceof ConstructorDescriptor) {
             if (isEnumEntry(containingDeclaration)) {
@@ -475,19 +505,25 @@ public class AsmUtil {
     }
 
     public static int genAssignInstanceFieldFromParam(FieldInfo info, int index, InstructionAdapter iv) {
-        return genAssignInstanceFieldFromParam(info, index, iv, 0);
+        return genAssignInstanceFieldFromParam(info, index, iv, 0, false);
     }
 
     public static int genAssignInstanceFieldFromParam(
             FieldInfo info,
             int index,
             InstructionAdapter iv,
-            int ownerIndex
+            int ownerIndex,
+            boolean cast
     ) {
         assert !info.isStatic();
         Type fieldType = info.getFieldType();
         iv.load(ownerIndex, info.getOwnerType());//this
-        iv.load(index, fieldType); //param
+        if (cast) {
+            iv.load(index, AsmTypes.OBJECT_TYPE); //param
+            StackValue.coerce(AsmTypes.OBJECT_TYPE, fieldType, iv);
+        } else {
+            iv.load(index, fieldType); //param
+        }
         iv.visitFieldInsn(PUTFIELD, info.getOwnerInternalName(), info.getFieldName(), fieldType.getDescriptor());
         index += fieldType.getSize();
         return index;
@@ -499,15 +535,38 @@ public class AsmUtil {
         v.invokespecial("java/lang/StringBuilder", "<init>", "()V", false);
     }
 
-    public static void genInvokeAppendMethod(InstructionAdapter v, Type type) {
-        type = stringBuilderAppendType(type);
-        v.invokevirtual("java/lang/StringBuilder", "append", "(" + type.getDescriptor() + ")Ljava/lang/StringBuilder;", false);
+    public static void genInvokeAppendMethod(@NotNull InstructionAdapter v, @NotNull Type type, @Nullable KotlinType kotlinType) {
+        Type appendParameterType;
+        if (kotlinType != null && InlineClassesUtilsKt.isInlineClassType(kotlinType)) {
+            appendParameterType = OBJECT_TYPE;
+            SimpleType nullableAnyType = kotlinType.getConstructor().getBuiltIns().getNullableAnyType();
+            StackValue.coerce(type, kotlinType, appendParameterType, nullableAnyType, v);
+        }
+        else {
+            appendParameterType = stringBuilderAppendType(type);
+        }
+
+        v.invokevirtual("java/lang/StringBuilder", "append", "(" + appendParameterType.getDescriptor() + ")Ljava/lang/StringBuilder;", false);
     }
 
-    public static StackValue genToString(StackValue receiver, Type receiverType) {
+    public static StackValue genToString(
+            @NotNull StackValue receiver,
+            @NotNull Type receiverType,
+            @Nullable KotlinType receiverKotlinType
+    ) {
         return StackValue.operation(JAVA_STRING_TYPE, v -> {
-            Type type = stringValueOfType(receiverType);
-            receiver.put(type, v);
+            Type type;
+            KotlinType kotlinType;
+            if (receiverKotlinType != null && InlineClassesUtilsKt.isInlineClassType(receiverKotlinType)) {
+                type = OBJECT_TYPE;
+                kotlinType = receiverKotlinType.getConstructor().getBuiltIns().getNullableAnyType();
+            }
+            else {
+                type = stringValueOfType(receiverType);
+                kotlinType = null;
+            }
+
+            receiver.put(type, kotlinType, v);
             v.invokestatic("java/lang/String", "valueOf", "(" + type.getDescriptor() + ")Ljava/lang/String;", false);
             return null;
         });
@@ -694,14 +753,24 @@ public class AsmUtil {
         KotlinType type = parameter.getType();
         if (isNullableType(type) || InlineClassesUtilsKt.isNullableUnderlyingType(type)) return;
 
-        int index = frameMap.getIndex(parameter);
         Type asmType = typeMapper.mapType(type);
         if (asmType.getSort() == Type.OBJECT || asmType.getSort() == Type.ARRAY) {
-            v.load(index, asmType);
+            StackValue value;
+            if (JvmCodegenUtil.isDeclarationOfBigArityFunctionInvoke(parameter.getContainingDeclaration())) {
+                int index = getIndexOfParameterInVarargInvokeArray(parameter);
+                value = StackValue.arrayElement(
+                        OBJECT_TYPE, null, StackValue.local(1, getArrayType(OBJECT_TYPE)), StackValue.constant(index)
+                );
+            }
+            else {
+                int index = frameMap.getIndex(parameter);
+                value = StackValue.local(index, asmType);
+            }
+            value.put(asmType, v);
             v.visitLdcInsn(name);
-            String checkMethod = "checkParameterIsNotNull";
-            v.invokestatic(IntrinsicMethods.INTRINSICS_CLASS_NAME, checkMethod,
-                           "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+            v.invokestatic(
+                    IntrinsicMethods.INTRINSICS_CLASS_NAME, "checkParameterIsNotNull", "(Ljava/lang/Object;Ljava/lang/String;)V", false
+            );
         }
     }
 
@@ -729,6 +798,28 @@ public class AsmUtil {
                 StackValue.coerce(innerType, type, v);
             }
         };
+    }
+
+    private static int getIndexOfParameterInVarargInvokeArray(@NotNull ParameterDescriptor parameter) {
+        if (parameter instanceof ReceiverParameterDescriptor) return 0;
+
+        DeclarationDescriptor container = parameter.getContainingDeclaration();
+        assert parameter instanceof ValueParameterDescriptor : "Non-extension-receiver parameter must be a value parameter: " + parameter;
+        int extensionShift = ((CallableDescriptor) container).getExtensionReceiverParameter() == null ? 0 : 1;
+
+        return extensionShift + ((ValueParameterDescriptor) parameter).getIndex();
+    }
+
+    // At the beginning of the vararg invoke of a function with big arity N, generates an assert that the vararg parameter has N elements
+    public static void generateVarargInvokeArityAssert(InstructionAdapter v, int functionArity) {
+        Label start = new Label();
+        v.load(1, getArrayType(OBJECT_TYPE));
+        v.arraylength();
+        v.iconst(functionArity);
+        v.ificmpeq(start);
+        v.visitLdcInsn("Vararg argument must contain " + functionArity + " elements.");
+        v.invokestatic(IntrinsicMethods.INTRINSICS_CLASS_NAME, "throwIllegalArgument", "(Ljava/lang/String;)V", false);
+        v.visitLabel(start);
     }
 
     public static void pushDefaultValueOnStack(@NotNull Type type, @NotNull InstructionAdapter v) {
